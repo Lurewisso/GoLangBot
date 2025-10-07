@@ -3,65 +3,140 @@ package rag
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 type Document struct {
 	ID      string
 	Content string
 	Vector  []float64
+	Tokens  []string
 }
 
 type VectorStore struct {
-	documents []Document
-	mu        sync.RWMutex
+	documents  []Document
+	vocabulary map[string]int
+	docVectors [][]float64
+	mu         sync.RWMutex
 }
 
 func NewVectorStore() *VectorStore {
 	return &VectorStore{
-		documents: make([]Document, 0),
+		documents:  make([]Document, 0),
+		vocabulary: make(map[string]int),
+		docVectors: make([][]float64, 0),
 	}
 }
 
-// Простая реализация эмбеддингов через TF-IDF like подход
-func (vs *VectorStore) textToVector(text string) []float64 {
-	words := strings.Fields(strings.ToLower(text))
-	wordFreq := make(map[string]float64)
+func (vs *VectorStore) tokenize(text string) []string {
+	text = strings.ToLower(text)
+
+	reg := regexp.MustCompile(`[^\w\sа-яё]`)
+
+	text = reg.ReplaceAllString(text, " ")
+
+	words := strings.Fields(text)
+
+	var tokens []string
+	stopWords := map[string]bool{
+		"и": true, "в": true, "на": true, "с": true, "по": true, "для": true,
+		"не": true, "что": true, "это": true, "как": true, "так": true,
+		"из": true, "у": true, "к": true, "о": true, "за": true, "от": true,
+		"то": true, "же": true, "все": true, "но": true, "вы": true, "бы": true,
+		"а": true, "мне": true, "вот": true, "до": true, "ну": true, "ли": true,
+		"если": true, "уже": true, "или": true, "ни": true, "быть": true, "был": true,
+		"про": true, "при": true, "год": true, "очень": true, "может": true, "есть": true,
+	}
 
 	for _, word := range words {
-		// Убираем пунктуацию и короткие слова
-		word = strings.Trim(word, ".,!?;:\"'")
-		if len(word) > 2 {
-			wordFreq[word]++
+		word = strings.TrimSpace(word)
+		if len(word) >= 2 && !stopWords[word] && isRussianWord(word) {
+			tokens = append(tokens, word)
 		}
 	}
 
-	// Нормализуем частоты
+	return tokens
+}
+
+func isRussianWord(word string) bool {
+	russianCount := 0
+	totalCount := 0
+
+	for _, r := range word {
+		if unicode.Is(unicode.Cyrillic, r) {
+			russianCount++
+		}
+		totalCount++
+	}
+
+	return russianCount > 0 && float64(russianCount)/float64(totalCount) > 0.6
+}
+
+func (vs *VectorStore) buildVocabulary() {
+	vs.vocabulary = make(map[string]int)
+	index := 0
+
+	for _, doc := range vs.documents {
+		for _, token := range doc.Tokens {
+			if _, exists := vs.vocabulary[token]; !exists {
+				vs.vocabulary[token] = index
+				index++
+			}
+		}
+	}
+}
+
+func (vs *VectorStore) textToVector(tokens []string) []float64 {
+	if len(vs.vocabulary) == 0 {
+		return []float64{}
+	}
+
+	vector := make([]float64, len(vs.vocabulary))
+
+	tf := make(map[string]float64)
+	for _, token := range tokens {
+		if idx, exists := vs.vocabulary[token]; exists {
+			tf[token]++
+			vector[idx] = tf[token]
+		}
+	}
+
 	maxFreq := 0.0
-	for _, freq := range wordFreq {
+	for _, freq := range tf {
 		if freq > maxFreq {
 			maxFreq = freq
 		}
 	}
 
-	vector := make([]float64, len(wordFreq))
-	i := 0
-	for _, freq := range wordFreq {
-		vector[i] = freq / maxFreq
-		i++
+	if maxFreq > 0 {
+		for token, freq := range tf {
+			if idx, exists := vs.vocabulary[token]; exists {
+				vector[idx] = freq / maxFreq
+			}
+		}
 	}
 
 	return vector
 }
 
-// Косинусное сходство
 func cosineSimilarity(a, b []float64) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+
 	dotProduct := 0.0
 	normA := 0.0
 	normB := 0.0
 
-	for i := 0; i < len(a) && i < len(b); i++ {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+
+	for i := 0; i < minLen; i++ {
 		dotProduct += a[i] * b[i]
 		normA += a[i] * a[i]
 		normB += b[i] * b[i]
@@ -79,16 +154,27 @@ func (vs *VectorStore) AddDocument(content string) string {
 	defer vs.mu.Unlock()
 
 	id := fmt.Sprintf("doc_%d", len(vs.documents))
-	vector := vs.textToVector(content)
+	tokens := vs.tokenize(content)
 
 	doc := Document{
 		ID:      id,
 		Content: content,
-		Vector:  vector,
+		Tokens:  tokens,
 	}
 
 	vs.documents = append(vs.documents, doc)
+
+	vs.buildVocabulary()
+	vs.updateAllVectors()
+
 	return id
+}
+
+func (vs *VectorStore) updateAllVectors() {
+	vs.docVectors = make([][]float64, len(vs.documents))
+	for i, doc := range vs.documents {
+		vs.docVectors[i] = vs.textToVector(doc.Tokens)
+	}
 }
 
 func (vs *VectorStore) SearchSimilar(query string, topK int) []Document {
@@ -99,7 +185,8 @@ func (vs *VectorStore) SearchSimilar(query string, topK int) []Document {
 		return []Document{}
 	}
 
-	queryVector := vs.textToVector(query)
+	queryTokens := vs.tokenize(query)
+	queryVector := vs.textToVector(queryTokens)
 
 	type scoredDoc struct {
 		doc   Document
@@ -108,14 +195,17 @@ func (vs *VectorStore) SearchSimilar(query string, topK int) []Document {
 
 	scoredDocs := make([]scoredDoc, 0, len(vs.documents))
 
-	for _, doc := range vs.documents {
-		score := cosineSimilarity(queryVector, doc.Vector)
-		if score > 0.1 { // Минимальный порог сходства
-			scoredDocs = append(scoredDocs, scoredDoc{doc: doc, score: score})
+	for i, docVector := range vs.docVectors {
+		score := cosineSimilarity(queryVector, docVector)
+
+		if score > 0.05 {
+			scoredDocs = append(scoredDocs, scoredDoc{
+				doc:   vs.documents[i],
+				score: score,
+			})
 		}
 	}
 
-	// Сортируем по убыванию сходства
 	for i := 0; i < len(scoredDocs); i++ {
 		for j := i + 1; j < len(scoredDocs); j++ {
 			if scoredDocs[j].score > scoredDocs[i].score {
@@ -124,7 +214,6 @@ func (vs *VectorStore) SearchSimilar(query string, topK int) []Document {
 		}
 	}
 
-	// Берем topK результатов
 	if len(scoredDocs) > topK {
 		scoredDocs = scoredDocs[:topK]
 	}
@@ -139,13 +228,20 @@ func (vs *VectorStore) SearchSimilar(query string, topK int) []Document {
 
 func (vs *VectorStore) LoadSampleData() {
 	sampleData := []string{
-		"RAG (Retrieval-Augmented Generation) - это архитектура, которая сочетает поиск информации и генерацию текста.",
-		"RAG сначала ищет релевантные документы в базе знаний, затем использует их для генерации ответа.",
-		"Векторный поиск позволяет находить семантически похожие тексты даже без точного совпадения слов.",
-		"Telegram боты создаются через BotFather и используют API для отправки сообщений.",
-		"Go (Golang) - статически типизированный язык программирования с сборщиком мусора и поддержкой многопоточности.",
-		"Docker позволяет упаковывать приложения в контейнеры для удобного развертывания.",
-		"API ключи необходимы для доступа к сервисам искусственного интеллекта как DeepSeek и OpenRouter.",
+		"RAG Retrieval Augmented Generation архитектура поиск информация генерация текст",
+		"RAG сначала ищет релевантные документы базе знаний затем использует генерацию ответа",
+		"Векторный поиск позволяет находить семантически похожие тексты точное совпадение слов",
+		"Telegram боты создаются BotFather используют API отправки сообщений",
+		"Go Golang статически типизированный язык программирования сборщик мусора поддержка многопоточности",
+		"Docker позволяет упаковывать приложения контейнеры удобное развертывание",
+		"API ключи необходимы доступа сервисам искусственного интеллекта DeepSeek OpenRouter",
+		"Программирование разработка программ обеспечение компьютеров алгоритмы код",
+		"Искусственный интеллект AI машинное обучение нейронные сети данные обучение модели",
+		"База данных хранение информации структурированные данные запросы SQL",
+		"Веб разработка создание сайтов приложений интерфейсы backend frontend",
+		"Мобильные приложения iOS Android разработка телефоны планшеты",
+		"Облачные вычисления сервера хранение данных AWS Google Cloud Azure",
+		"Блокчейн криптовалюты Bitcoin Ethereum смарт контракты децентрализация",
 	}
 
 	for _, content := range sampleData {
@@ -159,6 +255,7 @@ func (vs *VectorStore) GetStats() map[string]interface{} {
 
 	return map[string]interface{}{
 		"total_documents": len(vs.documents),
-		"store_size":      fmt.Sprintf("%d docs", len(vs.documents)),
+		"vocabulary_size": len(vs.vocabulary),
+		"store_size":      fmt.Sprintf("%d docs, %d words", len(vs.documents), len(vs.vocabulary)),
 	}
 }

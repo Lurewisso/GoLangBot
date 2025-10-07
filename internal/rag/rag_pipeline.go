@@ -14,21 +14,19 @@ func NewRAGPipeline() *RAGPipeline {
 		vectorStore: NewVectorStore(),
 	}
 
-	// Загружаем примеры данных
 	pipeline.vectorStore.LoadSampleData()
 
 	return pipeline
 }
 
 func (p *RAGPipeline) ProcessQuery(question string) (string, []Document) {
-	// Ищем релевантные документы
-	similarDocs := p.vectorStore.SearchSimilar(question, 3)
+
+	similarDocs := p.vectorStore.SearchSimilar(question, 5)
 
 	if len(similarDocs) == 0 {
-		return "Релевантная информация не найдена в базе знаний.", similarDocs
+		return "", similarDocs
 	}
 
-	// Формируем контекст для промпта
 	context := p.buildContext(similarDocs)
 
 	return context, similarDocs
@@ -40,13 +38,13 @@ func (p *RAGPipeline) buildContext(docs []Document) string {
 	}
 
 	var contextBuilder strings.Builder
-	contextBuilder.WriteString("Релевантная информация из базы знаний:\n\n")
+	contextBuilder.WriteString("Контекст для ответа:\n\n")
 
-	for i, doc := range docs {
-		contextBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, doc.Content))
+	for _, doc := range docs {
+		contextBuilder.WriteString(fmt.Sprintf("- %s\n", doc.Content))
 	}
 
-	contextBuilder.WriteString("\nИспользуй эту информацию для ответа на вопрос.")
+	contextBuilder.WriteString("\nИспользуй эту информацию для формирования ответа.")
 	return contextBuilder.String()
 }
 

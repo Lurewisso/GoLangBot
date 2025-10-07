@@ -20,7 +20,7 @@ func Load() *Config {
 
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Note: .env file not found, using environment variables")
+		log.Println("важно: .env файл не найден")
 	}
 
 	return &Config{

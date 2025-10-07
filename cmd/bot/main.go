@@ -11,7 +11,7 @@ func main() {
 	cfg := config.Load()
 
 	if cfg.TelegramToken == "" {
-		log.Fatal("TELEGRAM_TOKEN is required")
+		log.Fatal("необходим TELEGRAM_TOKEN")
 	}
 
 	var aiClient ai.AIClient
@@ -19,28 +19,28 @@ func main() {
 	switch cfg.AIProvider {
 	case "openrouter":
 		if cfg.OpenRouterToken == "" {
-			log.Fatal("OPENROUTER_TOKEN is required when using openrouter provider")
+			log.Fatal("необходим OPENROUTER_TOKEN во время использования модели openrouter")
 		}
 		aiClient = ai.NewOpenRouterClient(cfg.OpenRouterToken)
-		log.Println("Using OpenRouter AI provider")
+		log.Println("Используется openrouter модель")
 
 	case "deepseek":
 		if cfg.DeepSeekToken == "" {
-			log.Fatal("DEEPSEEK_TOKEN is required when using deepseek provider")
+			log.Fatal("необходим DEEPSEEK_TOKEN во время использования модели Deepseek")
 		}
 		aiClient = ai.NewDeepSeekClient(cfg.DeepSeekToken)
-		log.Println("Using DeepSeek AI provider")
+		log.Println("Используется Deepseek модель")
 
 	default:
 		aiClient = ai.NewMockClient("")
-		log.Println("Using mock AI client")
+		log.Println("Используется фейковая ИИ система!")
 	}
 
 	telegramBot, err := bot.NewBot(cfg.TelegramToken, aiClient, cfg.DebugMode)
 	if err != nil {
-		log.Fatalf("Failed to create bot: %v", err)
+		log.Fatalf("Ошибка при создании сессии: %v", err)
 	}
 
-	log.Printf("Bot started with %s provider!", cfg.AIProvider)
+	log.Printf("Бот работает с %s моделью (DeepSeek)!", cfg.AIProvider)
 	telegramBot.Start()
 }
