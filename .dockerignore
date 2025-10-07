@@ -1,15 +1,11 @@
-.git
-
-.gitignore
-
-README.md
-
-Dockerfile
 
 .dockerignore
-
-*.log
-
 tmp/
-
 dist/
+.git
+.gitignore
+README.md
+*.log
+.idea/
+.vscode/
+.DS_Store

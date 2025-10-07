@@ -1,3 +1,4 @@
 .env
 *.env
 config/local.yaml
+go.sum
